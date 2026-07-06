@@ -628,7 +628,7 @@ async function doDownload(){
     var b64=btoa(bin);
     var mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
     var href='data:'+mime+';base64,'+b64;
-    var fname='GIR_'+h.reportNo+'_'+h.date+'.xlsx';
+    var fname=h.reportNo+'.xlsx';
     // 다운로드 링크를 화면에 표시 (a.click() 자동클릭은 브라우저 보안정책으로 차단됨)
     var dlDiv=document.getElementById('dlLinkArea');
     if(!dlDiv){dlDiv=document.createElement('div');dlDiv.id='dlLinkArea';
