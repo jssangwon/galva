@@ -126,7 +126,7 @@ tr:nth-child(even) td{background:#fafafa}
             </div>
           </div>
           <div style="font-size:11px;color:#a0aec0;margin-top:6px">
-            ASTM A123 기준: 1.6~3.2mm → 65㎛ / 3.2~4.8mm → 75㎛ / 4.8~6.4mm → 85㎛
+            ASTM A123 기준: ≤1.6mm → 45㎛ / ~3.2mm → 65㎛ / ~4.8mm → 75㎛ / ~6.4mm → 85㎛ / 6.4mm 초과 → 100㎛
           </div>
         </div>
         <div class="full"><label class="lbl">계측기 정보</label>
@@ -215,14 +215,15 @@ var LOGO_B64 = "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDADUlKC8oITUvKy88OTU/UIVXUElJUKN1
 // 소수점 1자리 고정 (81 → "81.0")
 function fix1(v){ return parseFloat(v).toFixed(1); }
 
-var TH = [{sm:65},{sm:75},{sm:85}];
-var thIdx = 1;
 var allEquips = [];
 var items = [];
 var histOpen = false;
 var HIST_KEY = 'gir_hist';
 
-function sm(){ return TH[thIdx].sm; }
+function sm(){
+  var t = parseFloat(document.getElementById('f_thickness').value);
+  return getSpecFromThickness(isNaN(t) ? 0 : t);
+}
 
 function genMeas(){
   var hmin = sm()+3, vals = [];
@@ -265,13 +266,21 @@ function getSpecFromThickness(t){
   if(t<=3.2) return 65;
   if(t<=4.8) return 75;
   if(t<=6.4) return 85;
-  return 85;
+  return 100;  // 6.4mm 초과 → 100㎛
 }
 function onThicknessChange(){
-  var t=parseFloat(document.getElementById('f_thickness').value)||0;
+  var raw=document.getElementById('f_thickness').value;
+  var t=parseFloat(raw);
+  var inp=document.getElementById('f_thickness');
+  if(raw!=='' && (isNaN(t) || t<=0)){
+    inp.style.borderColor='#fc8181';
+    document.getElementById('specResultTxt').textContent='두께 확인 필요';
+    document.getElementById('specRangeTxt').textContent='숫자(mm)를 입력하세요';
+    return;
+  }
+  inp.style.borderColor='#e2e8f0';
+  t = isNaN(t) ? 0 : t;
   var s=getSpecFromThickness(t);
-  // thIdx 업데이트 (측정값 생성용)
-  thIdx = t<=1.6?0 : t<=3.2?0 : t<=4.8?1 : 2;
   document.getElementById('specResultTxt').textContent=s+'㎛ (min.)';
   document.getElementById('specRangeTxt').textContent='생성범위: '+(s+3)+'㎛~';
   document.getElementById('specDisplay').innerHTML=
@@ -294,8 +303,7 @@ function getHeader(){
     qty: document.getElementById('f_qty').value,
     drawingNo: document.getElementById('f_drawingNo').value,
     instrument: document.getElementById('f_instrument').value,
-    thickness: document.getElementById('f_thickness').value,
-    thIdx: thIdx
+    thickness: document.getElementById('f_thickness').value
   };
 }
 function setHeader(h){
@@ -303,15 +311,13 @@ function setHeader(h){
     if(h[k]!==undefined) document.getElementById('f_'+k).value=h[k];
   });
   // 히스토리 불러올 때 두께값 복원
-  if(h.thickness!==undefined){
+  if(h.thickness!==undefined && h.thickness!==''){
     document.getElementById('f_thickness').value = h.thickness;
-    onThicknessChange();
   } else if(h.thIdx!==undefined){
-    // 구버전 호환: thIdx → 두께 기본값으로 복원
-    var legacyT = h.thIdx===0 ? '2.5' : h.thIdx===1 ? '4.5' : '5.5';
-    document.getElementById('f_thickness').value = legacyT;
-    onThicknessChange();
+    // 구버전 기록 호환
+    document.getElementById('f_thickness').value = h.thIdx===0?'2.5':h.thIdx===1?'4.5':'5.5';
   }
+  onThicknessChange();
 }
 function loadHist(){ try{return JSON.parse(localStorage.getItem(HIST_KEY)||'[]')}catch{return[]} }
 function saveHist(h){
@@ -346,7 +352,18 @@ function addManual(){
   var raw=document.getElementById('equipInput').value;
   var lines=raw.split(/[\n,]+/).map(function(s){return s.trim()}).filter(Boolean);
   if(!lines.length) return;
-  allEquips=allEquips.concat(lines.map(function(eq){return {eq:eq}}));
+  // 중복 제거 (기존 목록 + 신규 입력 내 중복 모두)
+  var existing = {};
+  allEquips.forEach(function(e){ existing[e.eq]=true; });
+  var added=0, dup=0;
+  lines.forEach(function(eq){
+    if(existing[eq]){ dup++; return; }
+    existing[eq]=true;
+    allEquips.push({eq:eq});
+    added++;
+  });
+  if(dup>0) showToast('중복 '+dup+'개 제외, '+added+'개 추가됨');
+  if(!added){ showToast('모두 중복이라 추가된 부재가 없습니다.','err'); return; }
   rebuildItems(allEquips);
   document.getElementById('equipInput').value='';
   updateBanner(); renderItems(); updateTabLabel();
@@ -360,13 +377,20 @@ function handleXls(input){
       var wb=XLSX.read(ev.target.result,{type:'array'});
       var ws=wb.Sheets[wb.SheetNames[0]];
       var data=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
-      var equips=[];
-      data.forEach(function(row){row.forEach(function(cell){var v=String(cell).trim();if(v)equips.push(v)})});
+      var equips=[], seen={};
+      data.forEach(function(row){row.forEach(function(cell){
+        var v=String(cell).trim();
+        if(v && !seen[v]){ seen[v]=true; equips.push(v); }
+      })});
       if(!equips.length){showToast('부재번호를 찾을 수 없습니다.','err');return;}
-      allEquips=equips.map(function(eq){return {eq:eq}});
+      // 업로드 파일 내 중복 제거
+      var seen={}, uniq=[];
+      equips.forEach(function(eq){ if(!seen[eq]){seen[eq]=true;uniq.push(eq)} });
+      allEquips=uniq.map(function(eq){return {eq:eq}});
       rebuildItems(allEquips);
       updateBanner(); renderItems(); updateTabLabel();
-      showToast(allEquips.length>3?'전체 '+allEquips.length+'대 업로드 → 샘플링 3대':'전체 '+allEquips.length+'대 → 전수검사');
+      var dupN=equips.length-uniq.length;
+      showToast('전체 '+allEquips.length+'대 업로드'+(dupN>0?' (중복 '+dupN+'건 제외)':'')+(allEquips.length>3?' → 샘플링 3대':' → 전수검사'));
     };
     if(window.XLSX){doRead();return;}
     var s=document.createElement('script');
@@ -402,7 +426,7 @@ function renderItems(){
     var oa=fix1(oAvg(it.m)), res=getRes(it.m);
     var sps=[0,1,2].map(function(si){
       var vals=it.m.slice(si*5,si*5+5);
-      var vhtml=vals.map(function(v){return '<span class="sp-val '+(v>=s+1?'ok':'bad')+'">'+Math.round(v)+'</span>'}).join('');
+      var vhtml=vals.map(function(v){return '<span class="sp-val '+(v>=s+3?'ok':'bad')+'">'+Math.round(v)+'</span>'}).join('');
       return '<td style="text-align:center;border-left:1px solid #e2e8f0"><div class="sp-vals">'+vhtml+
         '<span class="sp-avg">avg:'+fix1(spAvg(it.m,si))+'</span></div></td>';
     }).join('');
@@ -628,7 +652,7 @@ async function doDownload(){
     var b64=btoa(bin);
     var mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
     var href='data:'+mime+';base64,'+b64;
-    var fname=h.reportNo+'.xlsx';
+    var fname=h.reportNo.replace(/[\\/:*?"<>|]/g,'_')+'.xlsx';
     // 다운로드 링크를 화면에 표시 (a.click() 자동클릭은 브라우저 보안정책으로 차단됨)
     var dlDiv=document.getElementById('dlLinkArea');
     if(!dlDiv){dlDiv=document.createElement('div');dlDiv.id='dlLinkArea';
